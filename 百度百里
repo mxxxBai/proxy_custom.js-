@@ -1,0 +1,83 @@
+/**
+ * 本脚本实现了 custom 类型的代理协议，可用于 Loon 的自定义协议（custom 类型）
+ * 使用方式：
+ * [Proxy]
+ * customBaidu = custom, 14.215.182.75, 443, script-path=https://your_script_path.js
+ * 
+ * 脚本实现5个session的生命周期方法，数据加密解密及其他处理请依据自定义协议调整
+ */
+
+/*
+ * author : 自定义代理实现
+ * email  : example@domain.com
+ * time   : 2024-10-01
+ * desc   : 百度直连自定义代理实现，保留动态验证机制
+ */
+
+let CUSTOM_STATUS_INVALID = -1;
+let CUSTOM_STATUS_CONNECTED = 0;
+let CUSTOM_STATUS_HANDSHAKE = 1;
+let CUSTOM_STATUS_FORWARDING = 2;
+var customStatus = CUSTOM_STATUS_INVALID;
+
+function createVerify(address) {
+  let index = 0;
+  for(let i = 0; i < address.length; i++) {
+    index = (index * 1318293 & 0x7FFFFFFF) + address.charCodeAt(i);
+  }
+  if(index < 0) {
+    index = index & 0x7FFFFFFF;
+  }
+  return index;
+}
+
+function tunnelDidConnected() {
+  console.log("Custom protocol connected:", $session);
+  _writeCustomHeader();
+  customStatus = CUSTOM_STATUS_CONNECTED;
+  return true;
+}
+
+function tunnelTLSFinished() {
+  console.log("Custom TLS Handshake finished.");
+  _writeCustomHeader();
+  customStatus = CUSTOM_STATUS_CONNECTED;
+  return true;
+}
+
+function tunnelDidRead(data) {
+  if (customStatus == CUSTOM_STATUS_HANDSHAKE) {
+    console.log('Custom handshake success');
+    customStatus = CUSTOM_STATUS_FORWARDING;
+    $tunnel.established($session); // 开始转发数据
+    return null; // 不转发读取的数据
+  } else if (customStatus == CUSTOM_STATUS_FORWARDING) {
+    return data; // 继续转发数据
+  }
+}
+
+function tunnelDidWrite() {
+  if (customStatus == CUSTOM_STATUS_CONNECTED) {
+    console.log('Write custom header success');
+    customStatus = CUSTOM_STATUS_HANDSHAKE;
+    $tunnel.read($session); // 读取服务器返回的数据
+    return false; // 中断 write 回调
+  }
+  return true;
+}
+
+function tunnelDidClose() {
+  console.log('Custom session closed');
+  return true;
+}
+
+// 自定义协议的头部生成和发送
+function _writeCustomHeader() {
+  let conHost = $session.conHost;
+  let conPort = $session.conPort;
+  let verify = createVerify(conHost);
+
+  // 根据自定义协议的要求构建头部信息
+  var header = `CUSTOM_CONNECT ${conHost}:${conPort}\r\nX-T5-Auth: ${verify}\r\nConnection: keep-alive\r\n\r\n`;
+  $tunnel.write($session, header);
+}
